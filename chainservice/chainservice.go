@@ -8,16 +8,11 @@ package chainservice
 
 import (
 	"context"
-	"math/rand"
-
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/pkg/errors"
-	"go.uber.org/zap"
-
 	"github.com/iotexproject/iotex-election/committee"
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 	"github.com/iotexproject/iotex-proto/golang/iotexrpc"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
+	"github.com/libp2p/go-libp2p-core/peer"
 
 	"github.com/iotexproject/iotex-core/action"
 	"github.com/iotexproject/iotex-core/action/protocol"
@@ -30,7 +25,6 @@ import (
 	"github.com/iotexproject/iotex-core/blockchain/blockdao"
 	"github.com/iotexproject/iotex-core/blockindex"
 	"github.com/iotexproject/iotex-core/blocksync"
-	"github.com/iotexproject/iotex-core/config"
 	"github.com/iotexproject/iotex-core/consensus"
 	"github.com/iotexproject/iotex-core/p2p"
 	"github.com/iotexproject/iotex-core/pkg/lifecycle"
@@ -103,13 +97,7 @@ func (cs *ChainService) HandleBlock(ctx context.Context, peer string, pbBlock *i
 
 // HandleSyncRequest handles incoming sync request.
 func (cs *ChainService) HandleSyncRequest(ctx context.Context, peer peer.AddrInfo, sync *iotexrpc.BlockSync) error {
-	return cs.blocksync.ProcessSyncRequest(ctx, sync.Start, sync.End, func(ctx context.Context, blk *block.Block) error {
-		return cs.p2pAgent.UnicastOutbound(
-			ctx,
-			peer,
-			blk.ConvertToBlockPb(),
-		)
-	})
+	return cs.blocksync.ProcessSyncRequest(ctx, peer, sync.Start, sync.End)
 }
 
 // HandleConsensusMsg handles incoming consensus message.
@@ -163,87 +151,3 @@ func (cs *ChainService) BlockSync() blocksync.BlockSync {
 
 // Registry returns a pointer to the registry
 func (cs *ChainService) Registry() *protocol.Registry { return cs.registry }
-
-// TODO: replace isDummyBlockSyncer by declaring BlockSyncerMode in blocksyncer package
-func createBlockSyncer(
-	isDummyBlockSyncer bool,
-	cfgBS config.BlockSync,
-	cons consensus.Consensus,
-	chain blockchain.Blockchain,
-	p2pAgent p2p.Agent,
-	dao blockdao.BlockDAO,
-	isHawaiiHeightHandler func(uint64) bool,
-) (blocksync.BlockSync, error) {
-	if isDummyBlockSyncer {
-		return blocksync.NewDummyBlockSyncer(), nil
-	}
-	return blocksync.NewBlockSyncer(
-		cfgBS,
-		chain.TipHeight,
-		func(height uint64) (*block.Block, error) {
-			return dao.GetBlockByHeight(height)
-		},
-		func(blk *block.Block) error {
-			if err := cons.ValidateBlockFooter(blk); err != nil {
-				log.L().Debug("Failed to validate block footer.", zap.Error(err), zap.Uint64("height", blk.Height()))
-				return err
-			}
-			retries := 1
-			if !isHawaiiHeightHandler(blk.Height()) {
-				retries = 4
-			}
-			var err error
-			for i := 0; i < retries; i++ {
-				if err = chain.ValidateBlock(blk); err == nil {
-					if err = chain.CommitBlock(blk); err == nil {
-						break
-					}
-				}
-				switch errors.Cause(err) {
-				case blockchain.ErrInvalidTipHeight:
-					log.L().Debug("Skip block.", zap.Error(err), zap.Uint64("height", blk.Height()))
-					return nil
-				case block.ErrDeltaStateMismatch:
-					log.L().Debug("Delta state mismatched.", zap.Uint64("height", blk.Height()))
-				default:
-					log.L().Debug("Failed to commit the block.", zap.Error(err), zap.Uint64("height", blk.Height()))
-					return err
-				}
-			}
-			if err != nil {
-				log.L().Debug("Failed to commit block.", zap.Error(err), zap.Uint64("height", blk.Height()))
-				return err
-			}
-			log.L().Info("Successfully committed block.", zap.Uint64("height", blk.Height()))
-			cons.Calibrate(blk.Height())
-			return nil
-		},
-		func(ctx context.Context, start uint64, end uint64, repeat int) {
-			peers, err := p2pAgent.Neighbors(ctx)
-			if err != nil {
-				log.L().Error("failed to get neighbours", zap.Error(err))
-				return
-			}
-			if len(peers) == 0 {
-				log.L().Error("no peers")
-				return
-			}
-			if repeat < 2 {
-				repeat = 2
-			}
-			if repeat > len(peers) {
-				repeat = len(peers)
-			}
-			for i := 0; i < repeat; i++ {
-				peer := peers[rand.Intn(len(peers)-i)]
-				if err := p2pAgent.UnicastOutbound(
-					ctx,
-					peer,
-					&iotexrpc.BlockSync{Start: start, End: end},
-				); err != nil {
-					log.L().Error("failed to request blocks", zap.Error(err), zap.String("peer", peer.ID.Pretty()), zap.Uint64("start", start), zap.Uint64("end", end))
-				}
-			}
-		},
-	)
-}
