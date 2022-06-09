@@ -378,6 +378,14 @@ func (builder *Builder) buildBlockSyncer() error {
 		builder.cs.blocksync = blocksync.NewDummyBlockSyncer()
 		return nil
 	}
+	if builder.cfg.Chain.EnableSystemLogIndexer {
+		// borrow this flag to randomly create dummy syncer for testing
+		if time.Now().Second() & 1 == 0 {
+			log.L().Info("create dummy block syncer")
+			builder.cs.blocksync = blocksync.NewDummyBlockSyncer()
+			return nil
+		}
+	}
 
 	p2pAgent := builder.cs.p2pAgent
 	chain := builder.cs.chain
