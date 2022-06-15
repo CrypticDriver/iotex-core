@@ -410,7 +410,7 @@ func TestRollDPoSConsensus(t *testing.T) {
 				protocol.WithRegistry(ctx, registry),
 				cfg.Genesis,
 			)))
-			actPool, err := actpool.NewActPool(sf, cfg.ActPool, actpool.EnableExperimentalActions())
+			actPool, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool, actpool.EnableExperimentalActions())
 			require.NoError(t, err)
 			require.NoError(t, err)
 			acc := account.NewProtocol(rewarding.DepositGas)
